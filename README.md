@@ -1,6 +1,7 @@
 # DSO545 Final Project Group 3
 
-This repo
+This repo is the project of MyLA311, aiming to help MyLA311 to better solve the requests submitted by LA residents.
+With the effort, we hope to help Council District Members and MyLA311 to detect the problems and adjust resources in time.
 
 ## Exploring data
 The exploredata_1.R ,exploredata_2.R and exploredata_3.R give plots that help us to start visualizing the dataset at the very beginning. 

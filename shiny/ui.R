@@ -3,8 +3,8 @@ library(leaflet)
 library(dplyr)
 library(rgdal)
 library(shinyjs)
-
 header = dashboardHeader(title="MyLA 311 Requests")
+options(show.error.messages = T)
 type <- c(
   "Graffiti Removal",
   "Bulky Items",
@@ -83,7 +83,9 @@ body <- dashboardBody(
               box(width = 8,
                   plotOutput("trend1"),
                   br(),
-                  plotOutput("trend2")),
+                  plotOutput("trend2"),
+                  br(),
+                  plotOutput("trend3")),
               box(width = 4,
                   dateRangeInput("histDates", label = "Date Range",
                                  start="2016-08-22",

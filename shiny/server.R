@@ -2,7 +2,7 @@ library(shinydashboard)
 library(leaflet)
 library(RColorBrewer)
 library(dplyr)
-library(rgdal)
+require(rgdal)
 library(lubridate)
 library(curl)
 library(ggplot2)
@@ -27,15 +27,18 @@ shinyServer(function(input, output,session){
   requestdata <- reactive({
     date1 <- input$dates[1]
     date2 <- input$dates[2]
+
     url = NULL
     request <- NULL
     for (i in seq(0,1500000000000,50000)){
       options("scipen"=20)
+      
       url <- append(url,paste("https://data.lacity.org/resource/ndkd-k878.csv?$select=createddate,updateddate,status,servicedate,closeddate,requesttype,address,cd,longitude,latitude&$order=createddate%20DESC&$where=createddate%3E%20%27",date1,"%27%20AND%20createddate%3C%20%27",date2,"%27&$limit=50000&$offset=",i,sep = ""))
       a<- length(url)
-      requestone <- read.csv(curl_download(url[a], "request.csv", 
-                                           quiet = TRUE, mode = "wb",
-                                           handle = new_handle()))
+      curl_download(url[a], "savedata/request.csv", 
+                    quiet = TRUE, mode = "wb",
+                    handle = new_handle())
+      requestone <- read.csv("savedata/request.csv")
       if (nrow(requestone)>1){
         request<- rbind(request,
                         requestone)
@@ -50,7 +53,6 @@ shinyServer(function(input, output,session){
   solveddata <- reactive({
       request <- requestdata()
       solved <- filter(request, Status=="Closed" & !is.na(ServiceDate))
-      solved <- filter(solved, !is.na(Longitude) & !is.na(Latitude))
       
       # calculate solve time
       solved$duration <- as.numeric(solved$UpdatedDate-solved$CreatedDate,units="mins")
@@ -79,10 +81,18 @@ shinyServer(function(input, output,session){
   
   # summary data
   summarytable <- reactive({
-    table=solveddata()%>%
+    
+    table <- solveddata()%>%
       filter(RequestType==input$serviceType)%>%
       group_by(CD)%>%
-      dplyr::summarise(Duration=mean(duration, na.rm=T),Frequency = n())
+      dplyr::summarise(Duration=mean(duration, na.rm=T))
+    
+    table2 <- requestdata()%>%
+      filter(RequestType==input$serviceType)%>%
+      group_by(CD)%>%
+      dplyr::summarise(Frequency = n())
+    
+    table <- merge(table, table2, by.x="CD",by.y="CD")
     
     table$Duration <- as.integer(table$Duration)
     table$DurationNum <- table$Duration
@@ -104,11 +114,11 @@ shinyServer(function(input, output,session){
     table$DurationNum <- as.numeric(table$DurationNum)
     table$Duration <- as.factor(table$Duration)
     table$Duration <- factor(table$Duration, ordered=T,
-                             levels = unique(table[order(table$DurationNum),"Duration"][[1]]))
+                             levels = unique(table[order(table$DurationNum),"Duration"]))
     table$Frequency <- as.numeric(table$Frequency)
     # order CD levels
     table$CD <- factor(table$CD, levels = c(1:15,"Average"))
-    colnames(table)[2:3] <- c("Ave. Solving Time","Num. of Requests Solved")
+    colnames(table)[2:3] <- c("Ave. Solving Time","Num. of Requests")
     table<-arrange(table,CD)
     table
   })
@@ -134,6 +144,7 @@ shinyServer(function(input, output,session){
   # spatical data link location with icon
   solved2data <- reactive({
     solved <- solveddata()
+    solved <- filter(solved, !is.na(Longitude) & !is.na(Latitude))
     solved <- filter(solved, RequestType==input$serviceType)
     
     # threshold now: data max volumn -- 65536
@@ -186,6 +197,8 @@ shinyServer(function(input, output,session){
   # leaflet: draw everything
   output$map <- renderLeaflet({
     solved2 <-solved2data()
+    
+    
     cd <- cddata()
     # district pop-up
     content <- NULL
@@ -207,15 +220,7 @@ shinyServer(function(input, output,session){
                         paste("<b><a><font color = 'Grey'>", "Address: ", "</font>", as.character(solved2@data[, 4]), "</a ></b>"),
                         paste("<b><a><font color = 'Grey'>", "Created Date: ", "</font>", as.character(solved2@data[, 6]), "</a ></b>"),
                         paste("<b><a><font color = 'Grey'>", "Processing Time: ", "</font>", as.character(solved2@data[, 5]), "</a ></b>"))
-    # pal
-    pal1 <- colorNumeric(
-      palette = "OrRd",
-      domain = cd$Density
-    )
-    pal2 <- colorNumeric(
-      palette = "OrRd",
-      domain = cd$DurationNum
-    )
+  
     leaflet(solved2) %>% 
       addProviderTiles(provider = "CartoDB.Positron") %>%
       setView(lng = -118.4, lat = 34.09, zoom = 10) %>%
@@ -239,16 +244,7 @@ shinyServer(function(input, output,session){
         overlayGroups = c("Show All","Cluster"),
         options = layersControlOptions(collapsed = F))%>%
       hideGroup("Cluster")
-#      addLegend("bottomleft", pal = pal1, values = ~cd$Density,
-#                title = "Population Density",
-#                labFormat = labelFormat(prefix = "per sq. mi"),
-#                opacity = 0.8,group = "Pop Density BG"
-#      )%>%
-#      addLegend("bottomleft", pal = pal2, values = ~cd$DurationNum,
-#                title = "Avg Solving Time",
-#                labFormat = labelFormat(prefix = "mins"),
-#                opacity = 0.8,group = "Solving Time BG"
-#      )
+
   })
   
   # ------------ 1.2 Performance Table------------
@@ -257,9 +253,13 @@ shinyServer(function(input, output,session){
     table},
     options = list(searching = FALSE,paging = FALSE))
   #--------------2.compare--------------------
-  tab2solveddata <- reactive({
+  tab2requestdata <- reactive({
     districtnum1 <- input$CD1
     districtnum2 <- input$CD2
+    # districtnum1 <- 1
+    # districtnum2 <- 2
+    # date1 <- "2016-08-22"
+    # date2 <- "2016-09-21"
     date1 <- input$tab2date[1]
     date2 <- input$tab2date[2]
     url = NULL
@@ -267,11 +267,13 @@ shinyServer(function(input, output,session){
     
     for (i in seq(0, 1500000, 50000)){
       options("scipen" = 20)
-      url <- append(url,paste("https://data.lacity.org/resource/ndkd-k878.csv?$select=createddate,updateddate,servicedate,closeddate,requesttype,address,cd,longitude,latitude&$order=createddate%20DESC&$where=createddate%3E%20%27",date1,"%27%20AND%20createddate%3C%20%27",date2,"%27%20AND%20cd=",districtnum1,"%20OR%20cd=",districtnum2,"&$limit=50000&$offset=",i,sep = ""))
+      
+      url <- append(url,paste("https://data.lacity.org/resource/ndkd-k878.csv?$select=createddate,status,updateddate,servicedate,closeddate,requesttype,address,cd,longitude,latitude&$order=createddate%20DESC&$where=createddate%3E%20%27",date1,"%27%20AND%20createddate%3C%20%27",date2,"%27%20AND%20(cd=",districtnum1,"%20OR%20cd=",districtnum2,")%20&$limit=50000&$offset=",i,sep = ""))
       a<- length(url)
-      requestdist <- read.csv(curl_download(url[a], "requestdis.csv", 
-                                            quiet = TRUE, mode = "wb",
-                                            handle = new_handle()))
+      curl_download(url[a], "savedata/requestdis.csv", 
+                    quiet = TRUE, mode = "wb",
+                    handle = new_handle())
+      requestdist <- read.csv("savedata/requestdis.csv")
       if (nrow(requestdist)>1){
         reqdistall<- rbind(reqdistall,
                            requestdist)
@@ -285,45 +287,23 @@ shinyServer(function(input, output,session){
     reqdistall_new$UpdatedDate <- mdy_hms(reqdistall_new$UpdatedDate)
     reqdistall_new$duration <- as.numeric(reqdistall_new$UpdatedDate - reqdistall_new$CreatedDate, units="mins")
     reqdistall_new
-    
-  })
-  output$more <- renderInfoBox({
-    data1 = tab2solveddata() %>%
-      group_by(CD,RequestType) %>%
-      dplyr::summarise(count = n())
-    data1$CD <- paste("CD",data1$CD)
-    data1 <- spread(data1,CD,count)
-    data1$diff <- data1[,2]-data1[,3]
-    data1 <- dplyr::arrange(data1, -diff)
 
-    infoBox(
-      "More Number",  ifelse (data1$diff[1]<0, paste("No Requests Type is More"),
-                                 paste(data1$RequestType,":",data1$diff[1])), icon = icon("list-ol")
-    )
+  })
+  
+  tab2solveddata <- reactive({
+    request <- tab2requestdata()
+    solved <- filter(request, Status=="Closed" & !is.na(ServiceDate))
+    
+    # calculate solve time
+    solved$duration <- as.numeric(solved$UpdatedDate-solved$CreatedDate,units="mins")
+    solved <- filter(solved, duration >20)
+    
+    solved
   })
 
-  output$slow <- renderInfoBox({
-    data1 = tab2solveddata() %>%
-      group_by(CD,RequestType) %>%
-      dplyr::summarise(AvgDuration = sum(duration)/n())
-    
-    data1$AvgDuration  <- as.integer(data1$AvgDuration)
-    
-    data1$CD <- paste("CD",data1$CD)
-    data1 <- spread(data1,CD,AvgDuration)
-    data1$diff <- data1[,2]-data1[,3]
-    data1 <- dplyr::arrange(data1, -diff)
-    data1$rate <- as.integer(data1$diff/data1[,3]*100)
-    
-
-    infoBox(
-      "Speed", ifelse (data1$rate[1]<0,paste("No Requests Type is Slower"),
-                       paste(data1$RequestType,":",data1$rate[1],"% Slower")), icon = icon("spinner"),
-      color = "yellow"
-    )
-  })
+  
   output$compare1 <- renderPlot({
-    data1 = tab2solveddata() %>%
+    data1 = tab2requestdata() %>%
       group_by(CD,RequestType) %>%
       dplyr::summarise(count = n())
     
@@ -367,13 +347,13 @@ shinyServer(function(input, output,session){
     data2$CD = factor(data2$CD, levels = lev)
     
     
-    ggplot(data2, aes(x=reorder(RequestType,AvgDuration), y = AvgDuration, fill = factor(CD),label = AvgDuration 
+    ggplot(data2, aes(x=reorder(RequestType,AvgDuration), y = AvgDuration/3600, fill = factor(CD),label = AvgDuration 
     )) +
       geom_bar(stat = "identity",position = "dodge") +
       geom_text(position = position_dodge(0.9),size=2,hjust = -0.1) +
       xlab("") +
       ylab("") +
-      ggtitle(paste("Avg Solving Time of CD",input$CD1,"and CD",input$CD2)) +
+      ggtitle(paste("Avg Solving Time (Day) of CD",input$CD1,"and CD",input$CD2)) +
       scale_fill_manual(values=c("#bdd7e7", "#6baed6"), 
                         name="Council District") +
       guides(fill = guide_legend(reverse = T)) +
@@ -401,11 +381,12 @@ shinyServer(function(input, output,session){
     
     for (i in seq(0, 1500000000000, 50000)){
       options("scipen" = 20)
-      url <- append(url,paste("https://data.lacity.org/resource/ndkd-k878.csv?$select=createddate,updateddate,servicedate,closeddate,requesttype,address,cd,longitude,latitude&$order=createddate%20DESC&$where=createddate%3E%20%27",datea,"%27%20AND%20createddate%3C%20%27",dateb,"%27%20AND%20cd=",districtnum,"&$limit=50000&$offset=",i,sep = ""))
+      url <- append(url,paste("https://data.lacity.org/resource/ndkd-k878.csv?$select=createddate,updateddate,servicedate,status,requesttype,address,cd,longitude,latitude&$order=createddate%20DESC&$where=createddate%3E%20%27",datea,"%27%20AND%20createddate%3C%20%27",dateb,"%27%20AND%20cd=",districtnum,"&$limit=50000&$offset=",i,sep = ""))
       a<- length(url)
-      requestdist <- read.csv(curl_download(url[a], "requestdis.csv", 
-                                            quiet = TRUE, mode = "wb",
-                                            handle = new_handle()))
+      curl_download(url[a], "savedata/requestdis.csv", 
+                    quiet = TRUE, mode = "wb",
+                    handle = new_handle())
+      requestdist <- read.csv("savedata/requestdis.csv")
       if (nrow(requestdist)>1){
         reqdistall<- rbind(reqdistall,
                            requestdist)
@@ -420,6 +401,7 @@ shinyServer(function(input, output,session){
     reqdistall_new$UpdatedDate <- mdy_hms(reqdistall_new$UpdatedDate)
     reqdistall_new$duration <- as.numeric(reqdistall_new$UpdatedDate - reqdistall_new$CreatedDate, units="mins")
     
+
     # service type - color
     # per week - count, duration
     if(wday(input$histDates[1]) != 1){
@@ -451,16 +433,18 @@ shinyServer(function(input, output,session){
     reqdistall_new = filter(reqdistall_new, weeknum >= 1, weeknum <= weekcal)
     reqdistall_new$weeknum = factor(reqdistall_new$weeknum)
     
-    ## Groupped dataset
-    reqdistall_group = reqdistall_new %>%
-      group_by(weeknum, RequestType) %>%
-      dplyr::summarise(count = n(), Avg_duration = mean(duration))
+
     
-    reqdistall_group})
+    reqdistall_new})
   
   ## plot count by weeknum, color by RequestType
   output$trend1 <- renderPlot({
-    data <- distdata()%>%
+    ## Groupped dataset
+    reqdistall_group = distdata() %>%
+      group_by(weeknum, RequestType) %>%
+      dplyr::summarise(count = n(), Avg_duration = mean(duration))
+    
+    data <- reqdistall_group%>%
       dplyr::filter(RequestType%in%input$serviceTypeAll)
     
     if(wday(input$histDates[1]) != 1){
@@ -498,7 +482,11 @@ shinyServer(function(input, output,session){
   
   ## plot duration by weeknum, color by RequestType
   output$trend2 <- renderPlot({
-    data <- distdata()%>%
+    reqdistall_group = distdata() %>%
+      group_by(weeknum, RequestType) %>%
+      dplyr::summarise(count = n(), Avg_duration = mean(duration))
+    
+    data <- reqdistall_group%>%
       dplyr::filter(RequestType%in%input$serviceTypeAll)
     
     if(wday(input$histDates[1]) != 1){
@@ -533,6 +521,58 @@ shinyServer(function(input, output,session){
       theme(axis.text.x = element_text(angle = 30, hjust = 1))+
       theme(panel.grid.major.y=element_line(colour = "grey",size = 0.4))
   })
+  output$trend3 <- renderPlot({
+    reqdistall_group = distdata() %>%
+      group_by(weeknum, RequestType) %>%
+      dplyr::summarise(count = n(), Avg_duration = mean(duration))
+    
+    
+    data1 <- reqdistall_group%>%
+      dplyr::filter(RequestType%in%input$serviceTypeAll)
+    
+    reqdistall_group_sloved = distdata()%>%
+      filter(Status=="Closed")%>%
+      group_by(weeknum, RequestType) %>%
+      dplyr::summarise(solvedcount = n())
+      
+    data2 <- reqdistall_group_sloved%>%
+      dplyr::filter(RequestType%in%input$serviceTypeAll)
+    
+    data <- merge(data1,data2,by.x=c("weeknum", "RequestType"),by.y=c("weeknum", "RequestType"))
+    data$solvingRate <- data$solvedcount/data$count*100
+    if(wday(input$histDates[1]) != 1){
+      new1 = 8 - wday(input$histDates[1])
+      datestart = input$histDates[1] + days(new1)
+    }else{
+      datestart = input$histDates[1]
+    }
+    
+    if(wday(input$histDates[2]) != 7){
+      new2 = wday(input$histDates[2])
+      dateend = input$histDates[2] - days(new2)
+    }else{
+      dateend = input$histDates[2]
+    }
+    datebreak = seq(datestart, dateend + days(1), by = "1 week")
+    
+    ggplot(data, aes(x = weeknum, y = solvingRate, col = RequestType, linetype =  RequestType, group = RequestType)) + 
+      geom_point(size = 1) + 
+      geom_line(size = 1) + 
+      scale_x_discrete(labels = datebreak) + 
+      scale_linetype_manual(values = c(rep("solid", 10), rep("dashed", 6))) +
+      scale_color_manual(values = c(brewer.pal(10, "Set3"), brewer.pal(6, "Set3")))+
+      xlab("The First Day of Week") + 
+      ylab("Weekly Solving Rate (%)") + 
+      coord_cartesian(ylim = c(50, 100))+
+      ggtitle("Weekly Solving Rate") + 
+      theme_classic() +
+      theme(legend.position = "top")+
+      theme(axis.line.x = element_line(color="black", size = 0.5),
+            axis.line.y = element_line(color="black", size = 0.5))+
+      theme(axis.text.x = element_text(angle = 30, hjust = 1))+
+      theme(panel.grid.major.y=element_line(colour = "grey",size = 0.4))
+  })
+  options(show.error.messages = T)
   #--------------4. tutorial------------------------------
   output$howtouse <- renderUI({
     
